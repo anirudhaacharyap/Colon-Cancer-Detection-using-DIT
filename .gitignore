@@ -13,7 +13,7 @@ feature_cache/
 logs/
 
 # Dataset (usually too large for Git)
-data/
+data/LC25000/
 
 # OS generated files
 .DS_Store
