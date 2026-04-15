@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Checkpoints and models
+checkpoints/
+
+# Cached features
+feature_cache/
+
+# Logs and training curves
+logs/
+
+# Dataset (usually too large for Git)
+data/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# AI-generated context
+.gemini/
+.system_generated/
+artifact_metadata.json
+artifacts/
+scratch/
+plan.md
+task.md
+impl_plan.md
+walkthrough.md
+explanation.md
+research_notes.md
+analysis_results.md
+experiment_results.md
+implementation_plan.md
