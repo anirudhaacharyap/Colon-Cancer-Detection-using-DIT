@@ -138,9 +138,34 @@ def evaluate():
     plt.tight_layout()
     cm_path = os.path.join(Config.LOG_DIR, "confusion_matrix.png")
     plt.savefig(cm_path)
+    # 8. ROC Curve
+    from sklearn.metrics import roc_curve
+    fpr, tpr, _ = roc_curve(all_targets, all_probs)
+    
+    plt.figure(figsize=(7, 5))
+    plt.plot(fpr, tpr, color='#e6a532', lw=2, label=f'Hybrid BOA-WOA + DiT (AUC≈{auc:.3f})')
+    plt.plot([0, 1], [0, 1], color='#1f77b4', lw=1.5, linestyle='--') # Diagonal dashed line
+    
+    # Styling to match the requested graph
+    plt.xlim([-0.05, 1.05])
+    plt.ylim([-0.05, 1.05])
+    plt.xlabel('False Positive Rate', fontsize=12)
+    plt.ylabel('True Positive Rate', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(loc="lower right", fontsize=11)
+    
+    # Clean up axes
+    ax = plt.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    plt.tight_layout()
+    roc_path = os.path.join(Config.LOG_DIR, "roc_curve.png")
+    plt.savefig(roc_path, dpi=300)
     plt.close()
     
-    print(f"\nSaved confusion matrix to {cm_path}")
+    print(f"Saved confusion matrix to {cm_path}")
+    print(f"Saved ROC curve map to {roc_path}")
     print("==========================================")
 
 if __name__ == "__main__":
