@@ -32,10 +32,11 @@ def evaluate():
     # Apply mask
     masked_test = features_test * optimal_mask
     
-    # 2. Setup DataLoader
+    # 2. Setup DataLoader with optimized settings
     test_dataset = TensorDataset(torch.tensor(masked_test, dtype=torch.float32), 
                                  torch.tensor(labels_test, dtype=torch.long))
-    test_loader = DataLoader(test_dataset, batch_size=Config.FINAL_BATCH_SIZE, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=Config.FINAL_BATCH_SIZE, shuffle=False,
+                             pin_memory=True, num_workers=4)
     
     # 3. Load Model
     model_path = os.path.join(Config.CHECKPOINT_DIR, "best_dit_model.pth")
@@ -48,20 +49,25 @@ def evaluate():
         hidden_dim=Config.FINAL_DIT_HIDDEN_DIM,
         depth=Config.FINAL_DIT_DEPTH,
         num_heads=Config.FINAL_DIT_HEADS,
-        mlp_ratio=Config.FINAL_DIT_MLP_RATIO
+        mlp_ratio=Config.FINAL_DIT_MLP_RATIO,
+        dropout=0.0  # No dropout during evaluation
     ).to(device)
     
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
     
-    # 4. Predict
+    # Compile model for faster inference
+    if Config.COMPILE_MODEL:
+        model = torch.compile(model)
+    
+    # 4. Predict with AMP
     all_preds = []
     all_targets = []
     all_probs = []
     
-    with torch.no_grad():
+    with torch.no_grad(), torch.amp.autocast('cuda', enabled=Config.USE_AMP):
         for x_batch, y_batch in test_loader:
-            x_batch = x_batch.to(device)
+            x_batch = x_batch.to(device, non_blocking=True)
             logits = model(x_batch)
             probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy() # probability of positive class
             preds = torch.argmax(logits, dim=1).cpu().numpy()

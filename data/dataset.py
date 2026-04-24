@@ -5,11 +5,15 @@ from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 import numpy as np
 
+from config import Config
+
 def get_dataloaders(train_eval_dir: str, test_dir: str, batch_size: int = 32):
     """
     Creates and returns DataLoaders for train, validation, and test splits.
     Splits the train_eval_dir into Train and Validation (approx 82/18 to mimic 70/15 of total).
     Uses test_dir directly for the Test split.
+    
+    Optimized for: 64-core Threadripper, 256 GB RAM — aggressive prefetch + pinned memory.
     
     Args:
         train_eval_dir (str): Path to the directory containing training and eval class folders.
@@ -58,9 +62,24 @@ def get_dataloaders(train_eval_dir: str, test_dir: str, batch_size: int = 32):
     train_dataset = Subset(full_dataset_train, train_idx)
     val_dataset = Subset(full_dataset_eval, val_idx)
 
-    # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True, persistent_workers=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True, persistent_workers=True)
+    num_workers = Config.NUM_WORKERS
+    prefetch = Config.PREFETCH_FACTOR
+
+    # Create DataLoaders — optimized for 64-core CPU + 256 GB RAM
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=True, persistent_workers=True,
+        prefetch_factor=prefetch, drop_last=True  # drop_last for consistent AMP batch sizes
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True, persistent_workers=True,
+        prefetch_factor=prefetch
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True, persistent_workers=True,
+        prefetch_factor=prefetch
+    )
 
     return train_loader, val_loader, test_loader

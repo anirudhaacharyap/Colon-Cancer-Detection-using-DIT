@@ -22,17 +22,22 @@ class TimestepEmbedder(nn.Module):
 class DiTBlock(nn.Module):
     """
     A DiT block with adaLN-Zero conditioning.
+    Optimized with approximate GELU and optional dropout.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, dropout=0.0):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = nn.MultiheadAttention(hidden_size, num_heads=num_heads, batch_first=True)
+        self.attn = nn.MultiheadAttention(
+            hidden_size, num_heads=num_heads, batch_first=True, dropout=dropout
+        )
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden = int(hidden_size * mlp_ratio)
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, mlp_hidden),
-            nn.GELU(),
-            nn.Linear(mlp_hidden, hidden_size)
+            nn.GELU(approximate='tanh'),   # Faster GELU approximation
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden, hidden_size),
+            nn.Dropout(dropout),
         )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
@@ -63,8 +68,10 @@ class DiTClassifier(nn.Module):
     Diffusion Transformer (DiT) adapted for binary classification.
     Takes 1D feature vectors, splits into patches, applies DiT blocks,
     and outputs class logits.
+    
+    Optimized: approximate GELU, dropout regularization, compile-friendly.
     """
-    def __init__(self, feature_dim=3840, patch_size=64, hidden_dim=256, depth=6, num_heads=8, mlp_ratio=4.0):
+    def __init__(self, feature_dim=3840, patch_size=64, hidden_dim=256, depth=6, num_heads=8, mlp_ratio=4.0, dropout=0.0):
         super().__init__()
         if feature_dim % patch_size != 0:
             raise ValueError("feature_dim must be divisible by patch_size")
@@ -82,14 +89,15 @@ class DiTClassifier(nn.Module):
         # Conditioning embedding (mimics class/timestep embedding of DiT)
         self.condition_embed = TimestepEmbedder(hidden_dim)
         
-        # DiT Blocks
+        # DiT Blocks with dropout
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_dim, num_heads, mlp_ratio=mlp_ratio)
+            DiTBlock(hidden_dim, num_heads, mlp_ratio=mlp_ratio, dropout=dropout)
             for _ in range(depth)
         ])
         
         # Classification Head
         self.norm_final = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
+        self.head_drop = nn.Dropout(dropout)
         self.head = nn.Linear(hidden_dim, 2)
         
         self._init_weights()
@@ -139,6 +147,7 @@ class DiTClassifier(nn.Module):
             
         # Final layer norm on CLS token
         x_cls = self.norm_final(x[:, 0])
+        x_cls = self.head_drop(x_cls)
         
         # Classification head
         logits = self.head(x_cls)
