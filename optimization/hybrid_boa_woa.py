@@ -48,7 +48,8 @@ def run_hybrid_boa_woa(train_features: np.ndarray, train_labels: np.ndarray,
     train_labels_gpu = torch.tensor(train_labels, dtype=torch.long, device=device)
     val_features_gpu = torch.tensor(val_features, dtype=torch.float32, device=device)
     val_labels_gpu = torch.tensor(val_labels, dtype=torch.long, device=device)
-    logger.info(f"GPU memory allocated for features: {torch.cuda.memory_allocated(device) / 1e6:.1f} MB")
+    if device == "cuda" and torch.cuda.is_available():
+        logger.info(f"GPU memory allocated for features: {torch.cuda.memory_allocated(device) / 1e6:.1f} MB")
     
     # Initialize population randomly
     # Standard uniform distribution for initial continuous features
@@ -119,11 +120,12 @@ def run_hybrid_boa_woa(train_features: np.ndarray, train_labels: np.ndarray,
         logger.info(f"Iteration [{iteration+1}/{max_iter}] - Selected Features: {selected_features}/{dim} - Best Fitness: {global_best_fitness:.4f}")
         
         # Strategic CUDA cache cleanup every 10 iterations
-        if (iteration + 1) % 10 == 0:
+        if device == "cuda" and torch.cuda.is_available() and (iteration + 1) % 10 == 0:
             torch.cuda.empty_cache()
     
     # Final cleanup — free GPU tensors
     del train_features_gpu, train_labels_gpu, val_features_gpu, val_labels_gpu
-    torch.cuda.empty_cache()
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     return get_binary_mask(global_best_pos)

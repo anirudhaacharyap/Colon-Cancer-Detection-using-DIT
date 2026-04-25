@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
 from sklearn.metrics import accuracy_score
 import numpy as np
 
@@ -34,14 +33,17 @@ def evaluate_fitness(mask: np.ndarray, train_features_gpu: torch.Tensor, train_l
     masked_train = train_features_gpu * mask_tensor.unsqueeze(0)
     masked_val = val_features_gpu * mask_tensor.unsqueeze(0)
     
-    # Create DataLoaders from GPU tensors (move to CPU for DataLoader compatibility)
-    train_dataset = TensorDataset(masked_train.cpu(), train_labels_gpu.cpu())
-    val_dataset = TensorDataset(masked_val.cpu(), val_labels_gpu.cpu())
-    
-    train_loader = DataLoader(train_dataset, batch_size=Config.FITNESS_BATCH_SIZE, shuffle=True,
-                              pin_memory=True, num_workers=0)  # num_workers=0 since data is small
-    val_loader = DataLoader(val_dataset, batch_size=Config.FITNESS_BATCH_SIZE, shuffle=False,
-                            pin_memory=True, num_workers=0)
+    if Config.FITNESS_USE_SUBSET and 0.0 < Config.FITNESS_SUBSET_FRACTION < 1.0:
+        n_train = masked_train.size(0)
+        n_val = masked_val.size(0)
+        keep_train = max(256, int(n_train * Config.FITNESS_SUBSET_FRACTION))
+        keep_val = max(128, int(n_val * Config.FITNESS_SUBSET_FRACTION))
+        train_idx = torch.randperm(n_train, device=device)[:keep_train]
+        val_idx = torch.randperm(n_val, device=device)[:keep_val]
+        masked_train = masked_train[train_idx]
+        train_labels_gpu = train_labels_gpu[train_idx]
+        masked_val = masked_val[val_idx]
+        val_labels_gpu = val_labels_gpu[val_idx]
     
     # Instantiate lightweight DiT model
     model = DiTClassifier(
@@ -62,8 +64,11 @@ def evaluate_fitness(mask: np.ndarray, train_features_gpu: torch.Tensor, train_l
     # Train for FITNESS_DIT_EPOCHS with AMP
     for epoch in range(Config.FITNESS_DIT_EPOCHS):
         model.train()
-        for x_batch, y_batch in train_loader:
-            x_batch, y_batch = x_batch.to(device, non_blocking=True), y_batch.to(device, non_blocking=True)
+        perm = torch.randperm(masked_train.size(0), device=device)
+        for start in range(0, masked_train.size(0), Config.FITNESS_BATCH_SIZE):
+            idx = perm[start:start + Config.FITNESS_BATCH_SIZE]
+            x_batch = masked_train[idx]
+            y_batch = train_labels_gpu[idx]
             
             optimizer.zero_grad(set_to_none=True)  # Slightly faster than zero_grad()
             
@@ -81,12 +86,13 @@ def evaluate_fitness(mask: np.ndarray, train_features_gpu: torch.Tensor, train_l
     all_targets = []
     
     with torch.no_grad(), torch.amp.autocast('cuda', enabled=Config.USE_AMP):
-        for x_batch, y_batch in val_loader:
-            x_batch = x_batch.to(device, non_blocking=True)
+        for start in range(0, masked_val.size(0), Config.FITNESS_BATCH_SIZE):
+            x_batch = masked_val[start:start + Config.FITNESS_BATCH_SIZE]
+            y_batch = val_labels_gpu[start:start + Config.FITNESS_BATCH_SIZE]
             logits = model(x_batch)
             preds = torch.argmax(logits, dim=1).cpu().numpy()
             all_preds.extend(preds)
-            all_targets.extend(y_batch.numpy())
+            all_targets.extend(y_batch.cpu().numpy())
     
     # Clean up model to free VRAM
     del model, optimizer, scaler
