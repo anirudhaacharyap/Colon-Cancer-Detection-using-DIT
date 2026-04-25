@@ -4,6 +4,18 @@ A deep learning pipeline for **binary classification of colon histopathology ima
 
 Built on the [LC25000 Lung and Colon Histopathological Image Dataset](https://www.kaggle.com/datasets/andrewmvd/lung-and-colon-cancer-histopathological-images).
 
+### Key Features
+
+- **Multi-backbone Feature Extraction**: ResNet-50 + DenseNet-121 + ViT-B/16 → 3840-dim features
+- **Hybrid Metaheuristic Optimization**: BOA + WOA for optimal feature selection
+- **DiT Classifier**: Diffusion Transformer with adaLN-Zero conditioning
+- **Stochastic Weight Averaging (SWA)**: Improved generalization via weight averaging
+- **Mixup Augmentation**: Regularization through input interpolation (α=0.2)
+- **Temperature Scaling**: Post-hoc calibration with LBFGS-fitted temperature
+- **Test-Time Augmentation (TTA)**: Multi-pass inference with Gaussian noise for stability
+- **Label Smoothing**: Cross-entropy with 0.1 smoothing to prevent overconfidence
+- **Comprehensive Evaluation**: ECE calibration plots, bootstrap CIs, DeLong tests, Pareto analysis
+
 ---
 
 ## 📋 Table of Contents
@@ -15,6 +27,7 @@ Built on the [LC25000 Lung and Colon Histopathological Image Dataset](https://ww
 - [Dataset Preparation](#dataset-preparation)
 - [Commands & Usage](#commands--usage)
 - [Generated Outputs & Graphs](#generated-outputs--graphs)
+- [Training Pipeline Features](#training-pipeline-features)
 - [Configuration](#configuration)
 - [Hardware Optimization](#hardware-optimization)
 
@@ -57,6 +70,15 @@ Built on the [LC25000 Lung and Colon Histopathological Image Dataset](https://ww
 │  │ Patch  │─▶│ DiT Blocks    │─▶│  CLS     │─▶│ Softmax  │      │
 │  │ Embed  │  │ (adaLN-Zero)  │  │  Head    │  │ Output   │      │
 │  └────────┘  └───────────────┘  └──────────┘  └──────────┘      │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────────────────────────────┐
+│              POST-HOC CALIBRATION & EVALUATION                   │
+│  ┌────────────┐  ┌───────────┐  ┌──────────────────────────┐    │
+│  │ Temp Scale │─▶│    TTA    │─▶│ Metrics + Calibration    │    │
+│  │  (LBFGS)   │  │ (7-pass) │  │ (ECE, Bootstrap, DeLong) │    │
+│  └────────────┘  └───────────┘  └──────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -72,10 +94,11 @@ Built on the [LC25000 Lung and Colon Histopathological Image Dataset](https://ww
 | **ViT** | timm | Vision Transformer ViT-B/16 (pretrained) |
 | **Optimization** | NumPy | Vectorized BOA/WOA metaheuristic algorithms |
 | **Metrics** | scikit-learn | Accuracy, Precision, Recall, F1, AUC-ROC, MCC |
-| **Statistics** | SciPy | 95% Confidence Intervals |
-| **Visualization** | Matplotlib, Seaborn | Training curves, ROC, confusion matrix |
-| **Data** | Pandas | Comparison tables |
+| **Statistics** | SciPy | 95% CIs, DeLong tests, Bootstrap |
+| **Visualization** | Matplotlib, Seaborn | Training curves, ROC, calibration, Pareto |
+| **Data** | Pandas | Comparison tables, prediction I/O |
 | **Progress** | tqdm | Progress bars during extraction |
+| **SWA** | torch.optim.swa_utils | Stochastic Weight Averaging |
 
 ---
 
@@ -84,9 +107,10 @@ Built on the [LC25000 Lung and Colon Histopathological Image Dataset](https://ww
 ```
 boa_woa_dit/
 ├── config.py                          # All hyperparameters & hardware settings
-├── train.py                           # Main training pipeline (entry point)
-├── evaluate.py                        # Model evaluation & metrics
-├── plot_roc_comparison.py             # ROC curve comparison across ablations
+├── train.py                           # Main training pipeline (mixup, SWA, EMA)
+├── evaluate.py                        # Evaluation (temp scaling, TTA, calibration)
+├── plot_roc_comparison.py             # ROC comparison with zoom inset (real data)
+├── plot_all_comparison_graphs.py      # Pareto plot + Bootstrap CI + DeLong tests
 ├── plot_tp_vs_fp.py                   # TP vs FP scatter plot comparison
 ├── requirements.txt                   # Python dependencies
 ├── check_env.py                       # Environment verification script
@@ -113,7 +137,12 @@ boa_woa_dit/
 │
 ├── feature_cache/                     # Cached extracted features (auto-generated)
 ├── checkpoints/                       # Saved model weights (auto-generated)
+│   └── {run_name}/                   # Per-run checkpoints (acc, loss, SWA, latest)
 └── logs/                             # Training logs & plots (auto-generated)
+    ├── full_run/                     # Full hybrid pipeline results
+    ├── ablation_dit_only/            # DiT-only ablation results
+    ├── ablation_boa_only/            # BOA-only ablation results
+    └── ablation_woa_only/            # WOA-only ablation results
 ```
 
 ---
@@ -205,13 +234,19 @@ Re-evaluate a previously trained model without retraining:
 
 ```bash
 python evaluate.py
+python evaluate.py --ablation dit_only
 ```
 
 ### Generate Comparison Graphs
 
+Run these **after all 4 variants** have been trained and evaluated:
+
 ```bash
-# ROC curve comparison across all ablation variants
+# ROC curve comparison with zoom inset (uses real predictions.csv)
 python plot_roc_comparison.py
+
+# Pareto plot (accuracy vs training time) + Bootstrap CI + DeLong tests
+python plot_all_comparison_graphs.py
 
 # True Positives vs False Positives scatter plot
 python plot_tp_vs_fp.py
@@ -227,7 +262,7 @@ python check_env.py
 
 ## 📊 Generated Outputs & Graphs
 
-### Metrics (saved to `logs/results.txt`)
+### Metrics (saved to `logs/{run}/results.txt`)
 
 | Metric | Description |
 |--------|-------------|
@@ -239,26 +274,52 @@ python check_env.py
 | Specificity | True negative rate |
 | MCC | Matthews Correlation Coefficient |
 | 95% CI | Confidence interval for accuracy |
+| Temperature | Fitted temperature scaling parameter |
+| ECE (before/after) | Expected Calibration Error pre/post temp scaling |
+| Threshold | Optimally tuned decision threshold |
 
 ### Graphs
 
 | Graph | File | Generated By | Description |
 |-------|------|-------------|-------------|
-| **Training Curves** | `logs/full_run/training_curves.png` | `train.py` | Loss, Accuracy, and LR schedule over epochs |
-| **Confusion Matrix** | `logs/full_run/confusion_matrix.png` | `evaluate.py` | Heatmap of TP/TN/FP/FN |
-| **ROC Curve** | `logs/full_run/roc_curve.png` | `evaluate.py` | ROC curve with AUC score |
-| **ROC Comparison** | `logs/roc_curve_comparison.png` | `plot_roc_comparison.py` | All 4 variants overlaid |
+| **Training Curves** | `logs/{run}/training_curves.png` | `train.py` | Loss (log scale), Accuracy (5-ep rolling avg), LR schedule with warmup/SWA markers |
+| **Confusion Matrix** | `logs/{run}/confusion_matrix.png` | `evaluate.py` | Heatmap of TP/TN/FP/FN |
+| **ROC Curve** | `logs/{run}/roc_curve.png` | `evaluate.py` | Single-model ROC curve with AUC |
+| **Calibration Plot** | `logs/{run}/calibration_plot.png` | `evaluate.py` | ECE before/after temperature scaling with shaded gap |
+| **ROC Comparison** | `logs/roc_curve_comparison.png` | `plot_roc_comparison.py` | All 4 ablation ROC curves with zoom inset |
+| **Pareto Plot** | `logs/pareto_plot.png` | `plot_all_comparison_graphs.py` | Accuracy vs real training duration |
+| **Bootstrap CI** | `logs/bootstrap_ci_plot.png` | `plot_all_comparison_graphs.py` | AUC CIs (n=2000) with DeLong p-values |
 | **TP vs FP** | `tp_vs_fp_comparison.png` | `plot_tp_vs_fp.py` | Scatter plot comparing model performance |
 
-### Checkpoints
+### Checkpoints (per run)
 
 | File | Description |
 |------|-------------|
-| `checkpoints/best_dit_model.pth` | Best model weights (lowest val loss) |
-| `feature_cache/features_train.npy` | Cached 3840-dim training features |
-| `feature_cache/features_val.npy` | Cached validation features |
-| `feature_cache/features_test.npy` | Cached test features |
-| `feature_cache/optimal_mask.npy` | Best feature selection mask from BOA-WOA |
+| `checkpoints/{run}/best_dit_model_acc.pth` | Best model weights (highest val accuracy) |
+| `checkpoints/{run}/best_dit_model_loss.pth` | Best model weights (lowest val loss) |
+| `checkpoints/{run}/best_dit_model_swa.pth` | SWA-averaged model weights |
+| `checkpoints/{run}/latest_dit_model.pth` | Latest epoch model weights |
+| `checkpoints/swa_dit_model.pth` | Top-level SWA checkpoint |
+| `feature_cache/features_{split}.npy` | Cached 3840-dim features per split |
+| `feature_cache/optimal_mask_{run}.npy` | Best feature selection mask per run |
+
+---
+
+## 🧪 Training Pipeline Features
+
+| Feature | Description |
+|---------|-------------|
+| **Mixup Augmentation** | Input interpolation with α=0.2 Beta distribution; original labels for accuracy, mixed for loss |
+| **Label Smoothing** | CrossEntropyLoss with 0.1 smoothing to prevent overconfident predictions |
+| **Stochastic Weight Averaging** | Averages model weights from epoch 140+ for flatter minima and better generalization |
+| **EMA (Exponential Moving Average)** | Shadow weights with 0.999 decay saved as checkpoints |
+| **Cosine Warmup LR** | 10-epoch linear warmup → cosine decay to 1e-7 |
+| **Temperature Scaling** | Post-hoc calibration: LBFGS-fitted single parameter on validation logits |
+| **Test-Time Augmentation** | 7-pass Gaussian noise (σ=0.008) with averaged softmax probabilities |
+| **Threshold Tuning** | Optimal decision threshold via F1-sweep on validation set |
+| **Calibration Analysis** | 15-bin ECE computed before and after temperature scaling |
+| **DeLong Test** | Statistical significance testing for AUC comparison between ablations |
+| **Bootstrap CI** | 2000-sample bootstrap with seed=42 for reproducible confidence intervals |
 
 ---
 
@@ -273,11 +334,17 @@ All hyperparameters are in [`config.py`](config.py). Key settings:
 | `MAX_ITER` | 75 | Optimization iterations |
 | `FINAL_DIT_HIDDEN_DIM` | 768 | Transformer hidden dimension |
 | `FINAL_DIT_DEPTH` | 12 | Number of DiT blocks |
-| `FINAL_EPOCHS` | 150 | Max training epochs |
-| `FINAL_LR` | 3e-4 | Learning rate (with cosine warmup) |
+| `FINAL_EPOCHS` | 200 | Max training epochs |
+| `FINAL_LR` | 1e-4 | Learning rate (with cosine warmup) |
+| `WARMUP_EPOCHS` | 10 | Linear LR warmup duration |
+| `MIXUP_ALPHA` | 0.2 | Mixup augmentation strength |
+| `LABEL_SMOOTHING` | 0.1 | Cross-entropy label smoothing |
 | `USE_AMP` | True | Mixed precision training (FP16) |
+| `USE_SWA` | True | Stochastic Weight Averaging |
+| `SWA_START_EPOCH` | 140 | Epoch to begin SWA averaging |
+| `TTA_ENABLED` | True | Test-Time Augmentation (7-pass) |
 | `COMPILE_MODEL` | True | torch.compile() for faster kernels |
-| `EARLY_STOP_PATIENCE` | 20 | Early stopping patience |
+| `EARLY_STOP_PATIENCE` | 25 | Early stopping patience (disabled by default) |
 
 ---
 
